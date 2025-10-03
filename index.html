@@ -5,7 +5,7 @@
      crossorigin="anonymous"></script>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Secure Vault | Password Manager with TOTP</title>
+    <title>TOTP-pass | Password Manager with TOTP</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/crypto-js/4.1.1/crypto-js.min.js"></script>
     <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/animate.css/4.1.1/animate.min.css">
     <style>
@@ -418,6 +418,32 @@
             margin-left: 8px;
         }
 
+        .file-upload-area {
+            border: 2px dashed var(--border);
+            border-radius: 12px;
+            padding: 20px;
+            text-align: center;
+            transition: all 0.3s ease;
+            cursor: pointer;
+            margin-bottom: 15px;
+        }
+
+        .file-upload-area:hover {
+            border-color: var(--primary);
+            background-color: rgba(99, 102, 241, 0.05);
+        }
+
+        .file-upload-area.dragover {
+            border-color: var(--primary);
+            background-color: rgba(99, 102, 241, 0.1);
+        }
+
+        .file-info {
+            margin-top: 10px;
+            font-size: 14px;
+            color: var(--gray);
+        }
+
         @media (max-width: 600px) {
             .toolbar {
                 flex-direction: column;
@@ -582,8 +608,19 @@
                 <label for="import-password">Decryption Password</label>
                 <input type="password" id="import-password" placeholder="Enter decryption password">
             </div>
+            
+            <!-- File Upload Area -->
             <div class="form-group">
-                <label for="import-data">Paste JSON Data *</label>
+                <label>Upload File</label>
+                <div class="file-upload-area" id="file-upload-area">
+                    <p>Drag & drop a file here or click to browse</p>
+                    <input type="file" id="import-file" accept=".json,.txt" style="display: none;">
+                    <div class="file-info" id="file-info">No file selected</div>
+                </div>
+            </div>
+            
+            <div class="form-group">
+                <label for="import-data">Or Paste JSON Data</label>
                 <textarea id="import-data" class="json-data" rows="10" placeholder="Paste your JSON data here..."></textarea>
             </div>
             <div class="form-actions">
@@ -684,6 +721,9 @@
             document.getElementById('download-export-btn').addEventListener('click', downloadExportData);
             document.getElementById('confirm-import-btn').addEventListener('click', handleImportData);
 
+            // File upload handling
+            setupFileUpload();
+
             // Password visibility toggles
             document.querySelectorAll('.toggle-password').forEach(btn => {
                 btn.addEventListener('click', (e) => {
@@ -726,6 +766,76 @@
                     });
                 }
             });
+        }
+
+        // File Upload Setup
+        function setupFileUpload() {
+            const fileUploadArea = document.getElementById('file-upload-area');
+            const fileInput = document.getElementById('import-file');
+            const fileInfo = document.getElementById('file-info');
+
+            // Click to select file
+            fileUploadArea.addEventListener('click', () => {
+                fileInput.click();
+            });
+
+            // Handle file selection
+            fileInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    handleFileUpload(file);
+                }
+            });
+
+            // Drag and drop functionality
+            fileUploadArea.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                fileUploadArea.classList.add('dragover');
+            });
+
+            fileUploadArea.addEventListener('dragleave', () => {
+                fileUploadArea.classList.remove('dragover');
+            });
+
+            fileUploadArea.addEventListener('drop', (e) => {
+                e.preventDefault();
+                fileUploadArea.classList.remove('dragover');
+                
+                const files = e.dataTransfer.files;
+                if (files.length > 0) {
+                    handleFileUpload(files[0]);
+                }
+            });
+        }
+
+        function handleFileUpload(file) {
+            const fileInfo = document.getElementById('file-info');
+            
+            // Check file type
+            if (!file.name.endsWith('.json') && !file.name.endsWith('.txt')) {
+                showNotification('Please upload a JSON or text file', 'error');
+                return;
+            }
+
+            fileInfo.textContent = `Selected: ${file.name} (${(file.size / 1024).toFixed(2)} KB)`;
+            
+            const reader = new FileReader();
+            
+            reader.onload = function(e) {
+                try {
+                    const content = e.target.result;
+                    document.getElementById('import-data').value = content;
+                    showNotification('File loaded successfully', 'success');
+                } catch (error) {
+                    showNotification('Failed to read file: ' + error.message, 'error');
+                }
+            };
+            
+            reader.onerror = function() {
+                showNotification('Failed to read file', 'error');
+            };
+            
+            reader.readAsText(file);
         }
 
         // TOTP Implementation
@@ -948,11 +1058,12 @@
             const importData = document.getElementById('import-data').value.trim();
             const importFormat = document.getElementById('import-format').value;
             
+            // Check if both file and text data are empty
             if (!importData) {
-                showNotification('Please paste JSON data', 'error');
+                showNotification('Please upload a file or paste JSON data', 'error');
                 return;
             }
-            
+
             try {
                 let parsedData;
                 
@@ -963,7 +1074,11 @@
                         return;
                     }
                     const bytes = CryptoJS.AES.decrypt(importData, password);
-                    parsedData = JSON.parse(bytes.toString(CryptoJS.enc.Utf8));
+                    const decrypted = bytes.toString(CryptoJS.enc.Utf8);
+                    if (!decrypted) {
+                        throw new Error('Decryption failed - wrong password or corrupted data');
+                    }
+                    parsedData = JSON.parse(decrypted);
                 } else {
                     parsedData = JSON.parse(importData);
                 }
@@ -975,14 +1090,24 @@
                 const existingIds = new Set(entries.map(entry => entry.id));
                 const newEntries = parsedData.entries.filter(entry => !existingIds.has(entry.id));
                 
+                if (newEntries.length === 0) {
+                    showNotification('No new entries to import (all entries already exist)', 'info');
+                    return;
+                }
+                
                 entries.push(...newEntries);
                 saveEntries();
                 renderEntries();
                 
-                showNotification(`Imported ${newEntries.length} entries`, 'success');
+                // Reset file input
+                document.getElementById('import-file').value = '';
+                document.getElementById('file-info').textContent = 'No file selected';
+                
+                showNotification(`Imported ${newEntries.length} entries successfully`, 'success');
                 closeModal('import-modal');
             } catch (error) {
                 showNotification('Import failed: ' + error.message, 'error');
+                console.error('Import error:', error);
             }
         }
 
@@ -1191,6 +1316,8 @@
             if (modalId === 'import-modal') {
                 document.getElementById('import-data').value = '';
                 document.getElementById('import-password').value = '';
+                document.getElementById('import-file').value = '';
+                document.getElementById('file-info').textContent = 'No file selected';
             }
         }
 
